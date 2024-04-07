@@ -18,7 +18,18 @@ def process_sentiment_words():
                 f.write(line[0] + ',' + str(-1 * float(line[5])) + '\n')
     f.close()
 
-
+# def process_sentiment_words_v2():
+#     with open("sentiment_words.csv", 'r', encoding='utf-8') as fp, open("sentiment_words.txt", 'w', encoding='utf-8') as fw:
+#         next(fp)  # Skip the header
+#         for line in fp:
+#             line = line.strip().replace(' ', '').split(',')
+#             if line[1] == 'idiom' or line[6] not in ['1.0', '2.0']:  ## improve file handling efficiency 
+#                 continue
+#             weight = str(line[5]) if line[6] == '1.0' else str(-1 * float(line[5]))
+#             fw.write(f"{line[0]},{weight}\n")
+            
+            
+            
 def normalize_sentiment_words():
     words = []
     weights = []
@@ -50,7 +61,7 @@ def process_words_list():
 
 def get_words_list():
     words_list = []
-    with open('word_list.txt', 'r', encoding='utf-8') as fp: #word_list.txt
+    with open('word_list.txt', 'r', encoding='utf-8') as fp: 
         lines = fp.readlines()
         for line in lines:
             words_list.append(line.strip())
@@ -127,11 +138,11 @@ def get_data():
             if '\u4e00' <= word <= '\u9fff' and word not in stopwords:
                 split_sentence.append(word)
         rs_sentences.append(split_sentence)
-    return rs_sentences
+    return rs_sentences,sentences
 
 
 def process_data(sentence_length, words_size, embed_size):
-    sentences = get_data()
+    sentences,fr_sentences = get_data()
     frequency = collections.Counter()
     for sentence in sentences:
         for word in sentence:
@@ -159,4 +170,5 @@ def process_data(sentence_length, words_size, embed_size):
     label = [1 for _ in range(50000)]
     label.extend([0 for _ in range(50000)])
     label = np.array(label)
-    return rs_sentences, label, word_vectors
+    res = [fr_sentences,rs_sentences]
+    return res, label, word_vectors

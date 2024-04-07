@@ -1,162 +1,134 @@
-import jieba
-import numpy as np
-import collections
-import torch
+import torch as t
+import torch.nn as nn
+from sklearn.model_selection import train_test_split
+import torch.utils.data
+from data_loader import MyData
+from model import SLCABG
+import data_util
 
 
-def process_sentiment_words():
-    f = open('sentiment_words.txt', 'w', encoding='utf-8')
-    with open('sentiment_words.csv', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines[1:]:
-            line = line.strip().replace(' ', '').split(',')
-            if line[1] == 'idiom':
-                continue
-            if line[6] == '1.0':
-                f.write(line[0] + ',' + str(line[5]) + '\n')
-            elif line[6] == '2.0':
-                f.write(line[0] + ',' + str(-1 * float(line[5])) + '\n')
-    f.close()
+device = t.device('cuda:0' if t.cuda.is_available() else 'cpu')
+SENTENCE_LENGTH = 12
+WORD_SIZE = 35000
+EMBED_SIZE = 768
+
+######################
+from LSTM import Sentiment
+from gensim.models.word2vec import Word2Vec
+from dataPreprocess import generate_id2wec
+
+model = Word2Vec.load('word2vec.model')
+
+w2id,embedding_weights = generate_id2wec(model)
+label_dic = {0:"Fake",1:"Real"}
+label_dic2 = {0:"negative",1:"positive"}
+
+senti = Sentiment(w2id,embedding_weights,100,200,2)
+
+##################################
+
+if __name__ == '__main__':
+    # sentences, label, word_vectors = data_util.process_data(SENTENCE_LENGTH, WORD_SIZE, EMBED_SIZE)
+    # x_train, x_test, y_train, y_test = train_test_split(sentences, label, test_size=0.2)
 
 
-def normalize_sentiment_words():
-    words = []
-    weights = []
-    with open('sentiment_words.txt', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines:
-            line = line.strip().split(',')
-            words.append(line[0])
-            weights.append(float(line[1]))
-    weights = np.array(weights)
-    mean = weights.mean()
-    std = weights.std()
-    weights = (weights - mean)/std
-    with open('normal_sentiment_words.txt', 'w', encoding='utf-8') as fp:
-        for i in range(len(words)):
-            fp.write(words[i] + ',' + str(weights[i]) + '\n')
+#######################################
+    sentences, label, word_vectors = data_util.process_data(SENTENCE_LENGTH, WORD_SIZE, EMBED_SIZE)
+    indices = list(range(100000))
+    train_indices, test_indices,x_train, x_test, y_train, y_test = train_test_split(indices,sentences[1], label, random_state=42,test_size=0.2)
+    train_sentences = [sentences[0][i] for i in train_indices]
+    test_sentences = [sentences[0][i] for i in test_indices]
+    
+    train_data_loader = torch.utils.data.DataLoader(MyData(x_train, y_train), 32, True)
+    test_data_loader = torch.utils.data.DataLoader(MyData(x_test, y_test), 32, False)
 
 
-def process_words_list():
-    sentences = get_data()
-    words_list = []
-    for sentence in sentences:
-        words_list.extend(sentence)
-    words_list = list(set(words_list))
-    with open('word_list.txt', 'w', encoding='utf-8') as fp:
-        for word in words_list:
-            fp.write(word + '\n')
+##########################################
 
 
-def get_words_list():
-    words_list = []
-    with open('word_list.txt', 'r', encoding='utf-8') as fp: 
-        lines = fp.readlines()
-        for line in lines:
-            words_list.append(line.strip())
-    return words_list
 
+    net = SLCABG(EMBED_SIZE, SENTENCE_LENGTH, word_vectors).to(device)
+    optimizer = t.optim.Adam(net.parameters(), 0.01)
+    criterion = nn.CrossEntropyLoss()
+    tp = 1
+    tn = 1
+    fp = 1
+    fn = 1
+    for epoch in range(15):
+        for i, (cls, sentences) in enumerate(train_data_loader):
+            optimizer.zero_grad()
+            sentences = sentences.type(t.LongTensor).to(device)
+            cls = cls.type(t.LongTensor).to(device)
+            out = net(sentences)
+            _, predicted = torch.max(out.data, 1)
+            predict = predicted.cpu().numpy().tolist()
+            pred = cls.cpu().numpy().tolist()
+            for f, n in zip(predict, pred):
+                if f == 1 and n == 1:
+                    tp += 1
+                elif f == 1 and n == 0:
+                    fp += 1
+                elif f == 0 and n == 1:
+                    fn += 1
+                else:
+                    tn += 1
+            p = tp / (tp + fp)
+            r = tp / (tp + fn)
+            f1 = 2 * r * p / (r + p)
+            acc = (tp + tn) / (tp + tn + fp + fn)
+            loss = criterion(out, cls).to(device)
+            loss.backward()
+            optimizer.step()
+            if (i + 1) % 1 == 0:
+                print("epoch:", epoch + 1, "step:", i + 1, "loss:", loss.item())
+                print('acc', acc, 'p', p, 'r', r, 'f1', f1)
+##############################################################
+    torch.save(net, 'model.pth')
+##############################################################
 
-def get_stopwords():
-    stopwords = []
-    with open('stop_words.txt', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines:
-            stopwords.append(line.strip())
-    return stopwords
-
-
-def get_sentiment_dict():
-    sentiment_dict = {}
-    with open('normal_sentiment_words.txt', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines:
-            line = line.strip().split(',')
-            sentiment_dict[line[0]] = float(line[1])
-    return sentiment_dict
-
-
-def process_word_vectors():
-    from bert_serving.client import BertClient
-    bc = BertClient()
-    word_list = get_words_list()
-    vecs = []
-    for word in word_list:
-        vec = bc.encode([word])
-        vecs.append(vec[0])
-    vecs = np.array(vecs)
-    np.savetxt("vecs.txt", vecs)
-
-
-def get_word_vectors():
-    word_list = get_words_list()
-    vecs = np.loadtxt('vecs.txt')
-    word2vec = {}
-    for i in range(len(word_list)):
-        word2vec[word_list[i]] = vecs[i]
-    return word2vec
-
-
-def get_weighted_word_vectors():
-    word2vec = get_word_vectors()
-    sentiment_dict = get_sentiment_dict()
-    for i in word2vec.keys():
-        if i in sentiment_dict.keys():
-            word2vec[i] = sentiment_dict[i] * word2vec[i]
-    return word2vec
-
-
-def get_data():
-    stopwords = get_stopwords()
-    sentiment_dict = get_sentiment_dict()
-    sentences = []
-    rs_sentences = []
-    with open('positive.txt', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines:
-            sentences.append(line.strip())
-    with open('negative.txt', 'r', encoding='utf-8') as fp:
-        lines = fp.readlines()
-        for line in lines:
-            sentences.append(line.strip())
-    jieba.load_userdict(sentiment_dict.keys())
-    for sentence in sentences:
-        sentence = list(jieba.cut(sentence))
-        split_sentence = []
-        for word in sentence:
-            if '\u4e00' <= word <= '\u9fff' and word not in stopwords:
-                split_sentence.append(word)
-        rs_sentences.append(split_sentence)
-    return rs_sentences
-
-
-def process_data(sentence_length, words_size, embed_size):
-    sentences = get_data()
-    frequency = collections.Counter()
-    for sentence in sentences:
-        for word in sentence:
-            frequency[word] += 1
-    word2index = dict()
-    for i, x in enumerate(frequency.most_common(words_size)):
-        word2index[x[0]] = i + 1
-    word2vec = get_weighted_word_vectors()
-    word_vectors = torch.zeros(words_size + 1, embed_size)
-    for k, v in word2index.items():
-        word_vectors[v, :] = torch.from_numpy(word2vec[k])
-    rs_sentences = []
-    for sentence in sentences:
-        sen = []
-        for word in sentence:
-            if word in word2index.keys():
-                sen.append(word2index[word])
-            else:
-                sen.append(0)
-        if len(sen) < sentence_length:
-            sen.extend([0 for _ in range(sentence_length - len(sen))])
-        else:
-            sen = sen[:sentence_length]
-        rs_sentences.append(sen)
-    label = [1 for _ in range(50000)]
-    label.extend([0 for _ in range(50000)])
-    label = np.array(label)
-    return rs_sentences, label, word_vectors
+#############################################################
+    net = torch.load('model.pth')
+    net.eval()
+    print('==========================================================================================')
+    with torch.no_grad():
+        tp = 1
+        tn = 1
+        fp = 1
+        fn = 1
+        for i,(cls, sentences) in zip(test_sentences,test_data_loader):
+###########################################   
+            res = senti.predict("./sentiment.h5",i )  # predict if fake reviews
+            index = res.index(max(res))  
+            f_label = label_dic[index]  # prediction label index
+            if index == 1: # if labeled real review
+                confidence = res[1]  # confidence level，when predict real review，then it's the probablity of being real
+                Fakedegrees = str(round(res[0] * 100, 2)) + "%"  # fake degress, if predict real, then it's the possibility of being fake review
+            else: # if labeled fake
+                confidence = res[0]  # confidence level, when predict fake, it's the possibility that review is fake
+                Fakedegrees = str(round(res[0], 2) * 100) + "%"  # fake degrees，if predict fake，it's the possibility of being fake
+            print("Comment:", i)
+            print("If fake:", f_label)
+            print("Confidence Level:", confidence)
+            print("Fake Degrees:", Fakedegrees)
+###########################################
+            sentences = sentences.type(t.LongTensor).to(device)
+            cls = cls.type(t.LongTensor).to(device)
+            out = net(sentences)
+            _, predicted = torch.max(out.data, 1)
+            predict = predicted.cpu().numpy().tolist()
+            pred = cls.cpu().numpy().tolist()
+            for f, n in zip(predict, pred):
+                if f == 1 and n == 1:
+                    tp += 1
+                elif f == 1 and n == 0:
+                    fp += 1
+                elif f == 0 and n == 1:
+                    fn += 1
+                else:
+                    tn += 1
+        p = tp / (tp + fp)
+        r = tp / (tp + fn)
+        f1 = 2 * r * p / (r + p)
+        acc = (tp + tn) / (tp + tn + fp + fn)
+        print("Sentiment Analysis Model:",'acc', acc, 'p', p, 'r', r, 'f1', f1) 
+        #it only measures the sentiment analysis part, will consider the fake review detection if have more ground truth data
