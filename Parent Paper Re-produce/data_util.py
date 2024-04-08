@@ -170,5 +170,5 @@ def process_data(sentence_length, words_size, embed_size):
     label = [1 for _ in range(50000)]
     label.extend([0 for _ in range(50000)])
     label = np.array(label)
-    res = [fr_sentences,rs_sentences]
+    res = [fr_sentences,rs_sentences]  ## add into list for feke review detector
     return res, label, word_vectors
